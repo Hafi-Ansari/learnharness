@@ -25,4 +25,4 @@ Prefer a short set of meaningful multiple-choice options whenever they make the 
 
 ### One question at a time
 
-Use each answer to decide what to ask next.
+Use each answer to decide what to ask next. The question tool's result contains his answer and starts your next turn: read it, react to his reasoning, and continue your work immediately. Do not end with an empty response or wait for a separate "go on" message after he has answered.

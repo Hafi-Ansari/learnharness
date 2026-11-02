@@ -23,7 +23,7 @@ import { createReadTool, readTool } from "./tools/read.ts";
 import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, TOGGLEABLE_TOOLS, type EnabledTools } from "../core/pending.ts";
 import type { PluginToolContext } from "../core/plugins.ts";
-import { toLlmMessages, nativeInputCause, PRACTICE_PROBLEM_TOOL } from "../core/native-messages.ts";
+import { toLlmMessages, nativeInputCause, needsContinuation, isEmptyAssistantCompletion, PRACTICE_PROBLEM_TOOL, type LhMessage } from "../core/native-messages.ts";
 import type { ChatGPTRequestCycle } from "./chatgpt-request-cycle.ts";
 import { usageWasAdmitted } from "./subscription-request-cycle.ts";
 import { PluginQuestionLedger, type NativePluginQuestionContribution } from "./plugin-question-tools.ts";
@@ -241,6 +241,11 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	// the normal no-observer path (tests, env-off).
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, kind) : undefined;
 	const seenInputs = new Set((opts.messages ?? []).map((m) => (m as { id?: string }).id).filter(Boolean));
+	const lastInput = opts.messages?.at(-1);
+	let answerReactionOwed = kind !== "practice" && lastInput?.role === "toolResult" &&
+		!lastInput.isError && (QUESTION_TOOLS as readonly string[]).includes(lastInput.toolName) &&
+		needsContinuation((opts.messages ?? []) as LhMessage[]);
+	let recoveredEmptyResponse = false;
 	const agent = new Agent({
 		identity: APP_IDENTITY,
 		sessionId: opts.chatId,
@@ -269,7 +274,22 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		// exits BEFORE the steering poll — the parked-marker stranding our
 		// Wave C registerLiveAgent-before-runPiTurn design depends on.
 		// undefined preserves normal scheduling (the old boolean false).
-		finishTurn: (turn) => (turn.toolResults.some(result => questionLedger?.isAcknowledgment(result) || (kind === "practice" && isPluginProblemPoseAcknowledgment(result))) || stopper(turn) ? { action: "end" } : undefined),
+		finishTurn: (turn, signal) => {
+			if (turn.toolResults.some(result => questionLedger?.isAcknowledgment(result) || (kind === "practice" && isPluginProblemPoseAcknowledgment(result))) || stopper(turn)) return { action: "end" };
+			if (!answerReactionOwed || signal?.aborted) return;
+			// No-dispatch failures can resume through the subscription cycle;
+			// they have not consumed the one recovery request.
+			if (turn.message.stopReason === "error" || turn.message.stopReason === "aborted") return;
+			if (!isEmptyAssistantCompletion(turn.message)) {
+				answerReactionOwed = false;
+				return;
+			}
+			// One native continuation: normal request admission, usage and
+			// steering still apply; no extra learner input or tool replay.
+			recoveredEmptyResponse = true;
+			opts.requestCycle?.oweForegroundContinuation();
+			return { action: "continue" };
+		},
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
 		// continuous teach→quiz→teach run, so delivery must inject at turn
@@ -285,10 +305,17 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		// an abort's dangling question call gets its INTERRUPTED result. It
 		// must never throw (pi's convertToLlm contract).
 		convertToLlm: toLlmMessages,
-		...(opts.contextUpdates ? { prepareNextTurnWithContext: ({ context }: { context: { messages: AgentMessage[] } }) => {
-			const messages = opts.contextUpdates!(context.messages);
+		// One hook, two sources: append-only side-question reference updates
+		// (when wired), then the empty-answer-reaction reminder.
+		prepareNextTurnWithContext: (turn) => {
+			const messages: AgentMessage[] = opts.contextUpdates ? opts.contextUpdates(turn.context.messages) : [];
+			if (answerReactionOwed && recoveredEmptyResponse && isEmptyAssistantCompletion(turn.message)) {
+				// Native system instructions survive a deferred background request,
+				// let the same Agent resume, and are filtered out at settlement.
+				messages.push({ role: "system", content: "The learner has answered the question. Your previous response was empty. Start the next turn now: respond to that answer and continue the lesson without waiting for another learner message.", timestamp: Date.now() });
+			}
 			return messages.length ? { messages } : undefined;
-		} } : {}),
+		},
 		prepareRequest: (request) => {
 			if (opts.callPurpose) {
 				let learner = false, automatic = false;
@@ -312,6 +339,14 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 				throw error;
 			}
 		},
+	});
+	// Classify a second blank completion before the native loop and every
+	// downstream listener consume message_end. This uses the existing
+	// persisted failure/Retry path and prevents another automatic request.
+	agent.subscribe((event) => {
+		if (event.type === "message_end" && answerReactionOwed && recoveredEmptyResponse && isEmptyAssistantCompletion(event.message)) {
+			Object.assign(event.message, { stopReason: "error", errorMessage: "The teacher returned an empty response twice. Retry to continue from your saved answer." });
+		}
 	});
 	questionLedger?.bind(agent);
 	if (opts.onUsage) {
