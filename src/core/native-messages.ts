@@ -1037,6 +1037,13 @@ export function reconstructRequestCause(messages: readonly LhMessage[]): Reconst
 	return resolve();
 }
 
+/** A completed generation with no prose or tool call has not responded to
+ * the learner. Thinking (including encrypted reasoning) alone is not output. */
+export function isEmptyAssistantCompletion(message: AgentMessage): boolean {
+	return message.role === "assistant" && message.stopReason === "stop" &&
+		message.content.every((block) => block.type === "thinking" || (block.type === "text" && !block.text.trim()));
+}
+
 export function needsContinuation(record: readonly LhMessage[]): boolean {
 	const messages = tailIgnoringSideQuestions(record);
 	if (pluginQuestionCallsOf(messages).some(call => call.status === "answerable" || call.status === "unreadable")) return false;

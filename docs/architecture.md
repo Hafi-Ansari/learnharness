@@ -89,6 +89,8 @@ Research, PDF, demo, and visual tools persist jobs, acknowledge dispatch, and st
 
 Worker completion and session delivery are separate. The worker saves its outcome and pending-delivery metadata before queueing a marker. [`server/jobs.ts`](../src/server/jobs.ts) delivers by steering a live agent at a native boundary or waking an idle, eligible session. Pending questions, pause, consent, or admission races can hold delivery. Only computing workers are abortable.
 
+If the answer reaction completes with no text or tool call, the same agent makes one continuation request with a system reminder to respond to the saved answer. Both requests retain normal admission and usage accounting. A second empty completion becomes a persisted failure with the existing Retry action; Retry omits the empty attempts from its temporary history while keeping the answer and attempts on disk. Provider errors, aborts and practice pauses do not trigger this recovery.
+
 A marker in the **saved conversation** acknowledges delivery—not HTTP acceptance or visibility in a stream. Reconciliation avoids replaying saved results; restart recovery restores known pending obligations and can respawn unfinished builtin workers. Plugin jobs recover from canonical task records without replaying plugin code. Legacy terminal jobs without delivery metadata are not guessed into replay. Deleting a session discards its obligations.
 
 This is single-process coordination over JSON files, not a transactional queue or exactly-once provider execution. In-memory composer steers do not have the same durability as job delivery.
