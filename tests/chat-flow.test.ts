@@ -354,6 +354,57 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.equal(danglingQuestionOf(saved2.messages), null);
 	});
 
+	it("FIXED: an empty, no-tool-call completion after a graded answer gets one automatic continuation, not a dead lesson", async () => {
+		// Originally observed in a real ChatGPT-subscription (gpt-6-astra)
+		// session: the model's reply to a just-graded quiz answer comes back
+		// response.completed, zero text, zero tool calls (recorded usage:
+		// outputTokens 4, reasoningTokens 0 — not an error, not a retry
+		// candidate under chatgpt-stream.ts's maxRetries:0). Before the fix
+		// (teacher-agent.ts's answer-reaction recovery, upstream amosblomqvist/
+		// learnharness#480) this stopped the lesson dead, matching GitHub
+		// issues #482 and #455. This now exercises the same shape with the
+		// faux engine and asserts the one-shot automatic recovery.
+		const { engine, calls } = scriptedTeacher((calls) => [
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage(
+					[fauxThinking("Probe the basics first."), fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				// The empty completion: no text, no tool call, clean stop.
+				return fauxAssistantMessage([], { stopReason: "stop" });
+			},
+			(context) => {
+				calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
+				return fauxAssistantMessage([fauxText("Right — Mercury it is.")]);
+			},
+		]);
+		const chat = createConfiguredChat("Test: empty completion recovers automatically");
+		createdChats.push(chat.id);
+
+		await drainTurn(post(chat.id, { type: "text", text: "teach me the solar system" }), agentFactory(engine));
+		const answer = gradedAnswer(QUIZ_INPUT, ["Mercury"]);
+		await drainTurn(post(chat.id, { type: "answer", toolCallId: "call-1", answer }), agentFactory(engine));
+
+		// Three prompts: the pose, the empty reaction, and the one bounded
+		// automatic recovery request — no fourth, so this can't become a loop.
+		assert.equal(calls.length, 3, "the empty reaction gets exactly one automatic continuation");
+		assert.match(calls[2]!.join(""), /learner has answered the question/, "the recovery request carries the nudge");
+
+		const saved = chatStore.getChat(chat.id)!;
+		const last = saved.messages[saved.messages.length - 1]!;
+		assert.equal(last.role, "assistant");
+		assert.match(JSON.stringify(last.content), /Mercury it is/, "the lesson recovered with real content, not left empty");
+
+		// No pending question, and no turn left running — the recovery
+		// settled the turn on its own, with no learner nudge required.
+		assert.equal(danglingQuestionOf(saved.messages), null);
+		assert.equal(isTurnRunning(chat.id), false, "no turn is left running");
+	});
+
 	it("rejects unknown chats", async () => {
 		const res = await handleChatRequest(post("chat_nonexistent", { type: "text", text: "hi" }));
 		assert.equal(res.status, 404);
