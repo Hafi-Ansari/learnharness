@@ -2,7 +2,7 @@
 
 This branch exists only in this fork. It carries one bug fix that upstream has not merged yet. Read this before updating, rebasing or deleting the branch.
 
-Written 2026-11-13, on top of upstream `main` at v0.6.1 (`cb25c8e`).
+Written 2026-11-13 on top of upstream v0.6.1. Last rebased 2026-11-25 onto upstream `main` at v0.7.0 (`069a6a1`).
 
 ## The bug
 
@@ -19,7 +19,7 @@ Observed in this fork's own sessions on the ChatGPT subscription connection with
 Upstream tracking:
 
 - Issues: [#482](https://github.com/amosblomqvist/learnharness/issues/482) (the exact bug), [#455](https://github.com/amosblomqvist/learnharness/issues/455), [#628](https://github.com/amosblomqvist/learnharness/issues/628), [#618](https://github.com/amosblomqvist/learnharness/issues/618)
-- Fix this branch ports: [PR #480](https://github.com/amosblomqvist/learnharness/pull/480) by kocendavid, open and unreviewed as of 2026-11-13
+- Fix this branch ports: [PR #480](https://github.com/amosblomqvist/learnharness/pull/480) by kocendavid, still open and unreviewed as of 2026-11-25
 - A different, complementary approach, not included here: [PR #678](https://github.com/amosblomqvist/learnharness/pull/678)
 
 ## What the branch changes
@@ -57,7 +57,14 @@ The other conflicts were "keep both sides" merges.
 
 ## Verification status
 
-Run on Windows, Node 26.12.1, 2026-11-13:
+After the rebase onto v0.7.0, run on macOS, Node 26.13.0, 2026-11-25:
+
+- `npm run typecheck`: clean.
+- The three touched suites: 104 of 104 pass.
+- The combined `prepareNextTurnWithContext` hook survived the rebase: side-question updates first, then the reminder.
+- Not rerun on v0.7.0: ESLint and the full suite.
+
+Earlier, on v0.6.1, run on Windows, Node 26.12.1, 2026-11-13:
 
 - `npm run typecheck`: clean.
 - ESLint on the changed files: clean.
@@ -81,7 +88,7 @@ git fetch origin
 git switch fix/empty-answer-continuation
 ```
 
-No dependency changed, so `npm install` and `npm run plugins:setup` are only needed if the device was not already set up for v0.6.1. The branch does not change any saved-data format, so it is safe to move learning data between a device on this branch and one on plain v0.6.1.
+The branch itself adds no dependency, but each upstream release it is rebased onto may. After moving a device to a new upstream version, run `npm install` and `npm run plugins:setup`, then `npm run build` if you launch with `npm start`. The branch does not change any saved-data format, so it is safe to move learning data between a device on this branch and one on the same upstream version without it.
 
 ## Keeping it up to date
 
